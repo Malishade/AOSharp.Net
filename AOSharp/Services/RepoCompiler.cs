@@ -389,16 +389,23 @@ namespace AOSharp.Services
         public List<(string name, string csprojPath, bool isLibrary, string section, string author, string description, List<string> dependencyRepoUrls)>
             DiscoverProjects(string localRepoPath)
         {
+            // Every project in the SDK repo is a library, manifest or not.
+            var sdkClone = GetLocalRepoPath(Config.AoSharpSdkRepoUrl);
+            var isSdkRepo = !string.IsNullOrEmpty(sdkClone) &&
+                            string.Equals(Path.GetFullPath(localRepoPath).TrimEnd(Path.DirectorySeparatorChar),
+                                Path.GetFullPath(sdkClone).TrimEnd(Path.DirectorySeparatorChar),
+                                StringComparison.OrdinalIgnoreCase);
+
             return EnumerateCsprojFiles(localRepoPath, SearchOption.AllDirectories)
                 .Select(p =>
                 {
                     var manifest = PluginManifest.LoadForProject(p);
-                    var isLibrary = manifest.IsLibrary;
+                    var isLibrary = manifest.IsLibrary || isSdkRepo;
                     return (
                         Path.GetFileNameWithoutExtension(p),
                         p,
                         isLibrary,
-                        manifest.ResolveSection(),
+                        isSdkRepo ? PluginSections.Library : manifest.ResolveSection(),
                         manifest.Author,
                         manifest.Description,
                         manifest.Dependencies ?? new List<string>());
@@ -450,13 +457,20 @@ namespace AOSharp.Services
         /// True for SDK-style assemblies (<c>AOSharp.Common</c>, <c>AOSharp.Core</c>, …).
         /// Excludes the WPF loader host <c>AOSharp.dll</c> (stem <c>AOSharp</c> only), which would otherwise match <c>AOSharp.*</c> globs.
         /// </summary>
+        /// <summary>
+        /// The SDK's game message library. It ships with the SDK but is not named AOSharp.*,
+        /// and plugins that read or send game messages compile against it.
+        /// </summary>
+        private const string SdkMessagingAssembly = "SmokeLounge.AOtomation";
+
         private static bool IsAoSharpSdkAssemblyStem(string stem)
         {
             if (string.IsNullOrEmpty(stem))
                 return false;
             if (string.Equals(stem, "AOSharp", StringComparison.OrdinalIgnoreCase))
                 return false;
-            return stem.StartsWith("AOSharp.", StringComparison.OrdinalIgnoreCase);
+            return stem.StartsWith("AOSharp.", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(stem, SdkMessagingAssembly, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -521,7 +535,7 @@ namespace AOSharp.Services
 
             try
             {
-                foreach (var path in Directory.EnumerateFiles(cloneRoot, "AOSharp.*.dll", SearchOption.AllDirectories))
+                foreach (var path in Directory.EnumerateFiles(cloneRoot, "*.dll", SearchOption.AllDirectories))
                 {
                     if (IsIntermediateAssemblyPath(path))
                         continue;
@@ -532,7 +546,7 @@ namespace AOSharp.Services
                         continue;
 
                     var id = Path.GetFileNameWithoutExtension(path);
-                    if (string.IsNullOrEmpty(id) || !id.StartsWith("AOSharp.", StringComparison.OrdinalIgnoreCase))
+                    if (!IsAoSharpSdkAssemblyStem(id))
                         continue;
 
                     if (!byId.TryGetValue(id, out var existing) ||
@@ -984,7 +998,7 @@ namespace AOSharp.Services
                 }
 
                 targetsSb.AppendLine(
-                    "      <Reference Remove=\"@(Reference)\" Condition=\"'%(Filename)' != '' and $([System.String]::Copy('%(Filename)').StartsWith('AOSharp.'))\" />");
+                    "      <Reference Remove=\"@(Reference)\" Condition=\"'%(Filename)' != '' and ($([System.String]::Copy('%(Filename)').StartsWith('AOSharp.')) or '%(Filename)' == '" + SdkMessagingAssembly + "')\" />");
                 targetsSb.AppendLine("    </ItemGroup>");
                 targetsSb.AppendLine("    <ItemGroup>");
                 targetsSb.AppendLine(
@@ -2187,10 +2201,12 @@ namespace AOSharp.Services
                 return;
 
             var m = PluginManifest.LoadForProject(plugin.ProjectFilePath);
+            var isSdk = string.Equals(plugin.RepoUrl, Config.AoSharpSdkRepoUrl, StringComparison.OrdinalIgnoreCase);
             plugin.Author = m.Author;
             plugin.Description = m.Description;
-            plugin.IsLibrary = m.IsLibrary;
-            plugin.Section = m.ResolveSection();
+            // Every project in the SDK repo is a library, manifest or not.
+            plugin.IsLibrary = m.IsLibrary || isSdk;
+            plugin.Section = isSdk ? PluginSections.Library : m.ResolveSection();
             plugin.DependencyRepoUrls = m.Dependencies != null ? new List<string>(m.Dependencies) : new List<string>();
         }
 
