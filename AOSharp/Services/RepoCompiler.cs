@@ -458,17 +458,44 @@ namespace AOSharp.Services
         /// Excludes the WPF loader host <c>AOSharp.dll</c> (stem <c>AOSharp</c> only), which would otherwise match <c>AOSharp.*</c> globs.
         /// </summary>
         /// <summary>
-        /// The SDK's game message library. It ships with the SDK but is not named AOSharp.*,
-        /// and plugins that read or send game messages compile against it.
+        /// The SDK's game message library in SDK versions that split it out of AOSharp.Common.
+        /// It is not named AOSharp.*, so it is listed by name.
         /// </summary>
         private const string SdkMessagingAssembly = "SmokeLounge.AOtomation";
 
+        private static HashSet<string> _sdkProjectNames;
+
+        /// <summary>
+        /// Re-reads which projects the SDK clone in use contains. Called whenever the SDK is built,
+        /// since a pull can add or remove projects.
+        /// </summary>
+        private static void RefreshSdkProjectNames()
+        {
+            var clone = GetLocalRepoPath(Config.AoSharpSdkRepoUrl);
+            _sdkProjectNames = !string.IsNullOrEmpty(clone) && Directory.Exists(clone)
+                ? EnumerateCsprojFiles(clone, SearchOption.AllDirectories)
+                    .Select(Path.GetFileNameWithoutExtension)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : null;
+        }
+
+        /// <summary>
+        /// An SDK assembly is one built from a project in the SDK clone in use. A DLL that only looks
+        /// like one, left behind by another SDK or an older layout, is not, so it never reaches a build.
+        /// Before the SDK has been cloned, the AOSharp.* naming decides.
+        /// </summary>
         private static bool IsAoSharpSdkAssemblyStem(string stem)
         {
             if (string.IsNullOrEmpty(stem))
                 return false;
             if (string.Equals(stem, "AOSharp", StringComparison.OrdinalIgnoreCase))
                 return false;
+
+            if (_sdkProjectNames == null || _sdkProjectNames.Count == 0)
+                RefreshSdkProjectNames();
+            if (_sdkProjectNames != null && _sdkProjectNames.Count > 0)
+                return _sdkProjectNames.Contains(stem);
+
             return stem.StartsWith("AOSharp.", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(stem, SdkMessagingAssembly, StringComparison.OrdinalIgnoreCase);
         }
@@ -706,6 +733,7 @@ namespace AOSharp.Services
             }
 
             await Task.Run(() => AlignCompiledRepoTargetFrameworks(sdkLocalPath, logName));
+            RefreshSdkProjectNames();
 
             var libraryProjects = DiscoverProjects(sdkLocalPath)
                 .Where(p => p.isLibrary)
