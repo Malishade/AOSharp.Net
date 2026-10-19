@@ -12,7 +12,10 @@ namespace AOSharp
     public class Config
     {
         public const string AoSharpSdkKey = "aosharp-sdk-default";
-        public const string AoSharpSdkRepoUrl = "https://github.com/aosharp/AOSharp.SDK";
+        public const string AoSharpSdkRepoUrl = "https://github.com/Malishade/AOSharp.SDK";
+
+        /// <summary>The SDK this loader used before; its entries are dropped on load so the current one replaces it.</summary>
+        private const string ReplacedSdkRepoUrl = "https://github.com/aosharp/AOSharp.SDK";
         public const string DefaultLoadoutId = "00000000-0000-0000-0000-000000000001";
         public const string DefaultLoadoutName = "Default";
 
@@ -96,6 +99,8 @@ namespace AOSharp
 
         private void EnsureDefaults()
         {
+            DropReplacedSdk();
+
             var sdkEntries = Plugins
                 .Where(kvp => kvp.Value.RepoUrl == AoSharpSdkRepoUrl)
                 .ToList();
@@ -117,6 +122,21 @@ namespace AOSharp
                     AutoUpdate = true,
                     IsDefault = true
                 });
+            }
+        }
+
+        private void DropReplacedSdk()
+        {
+            var keys = Plugins
+                .Where(kvp => string.Equals(kvp.Value.RepoUrl, ReplacedSdkRepoUrl, StringComparison.OrdinalIgnoreCase))
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (var key in keys)
+            {
+                Plugins.Remove(key);
+                foreach (var loadout in Loadouts ?? Enumerable.Empty<Loadout>())
+                    loadout.PluginKeys?.Remove(key);
             }
         }
 

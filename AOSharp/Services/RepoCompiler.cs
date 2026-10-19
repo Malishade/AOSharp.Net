@@ -746,10 +746,19 @@ namespace AOSharp.Services
                     Report(projName, $"Ready: {displayPath}", dllPath: displayPath);
             }
 
-            return compiledLibraries.Any(l =>
+            var built = compiledLibraries.Any(l =>
                 string.Equals(l.packageId, "AOSharp.Core", StringComparison.OrdinalIgnoreCase) &&
                 File.Exists(l.dllPath));
+            if (built)
+                WriteDependencyBuildStamp(GetPluginOutputPath("AOSharp.Core"), GetSdkBuildStamp(sdkLocalPath));
+            return built;
         }
+
+        /// <summary>Identifies the SDK commit the SDK libraries were last built from.</summary>
+        private string GetSdkBuildStamp(string sdkLocalPath) =>
+            string.IsNullOrEmpty(sdkLocalPath) || !Directory.Exists(Path.Combine(sdkLocalPath, ".git"))
+                ? null
+                : GetDependencyBuildStamp(Config.AoSharpSdkRepoUrl, sdkLocalPath, sdkLocalPath);
 
         /// <summary>
         /// NativeHost loads from Plugins\AOSharp.Bootstrap. Keep Bootstrap, Common, Core, and Reloaded deps in sync there.
@@ -803,12 +812,17 @@ namespace AOSharp.Services
             List<(string packageId, string dllPath)> compiledLibraries,
             bool pullFirst)
         {
-            if (compiledLibraries.Any(l =>
+            // Reuse the SDK build only when it came from the SDK commit checked out now; one left by
+            // another SDK or an older commit is rebuilt.
+            var sdkPath = GetLocalRepoPath(Config.AoSharpSdkRepoUrl);
+            var stamp = GetSdkBuildStamp(sdkPath);
+            if (stamp != null &&
+                ReadDependencyBuildStamp(GetPluginOutputPath("AOSharp.Core")) == stamp &&
+                compiledLibraries.Any(l =>
                     string.Equals(l.packageId, "AOSharp.Core", StringComparison.OrdinalIgnoreCase) &&
                     File.Exists(l.dllPath)))
                 return true;
 
-            var sdkPath = GetLocalRepoPath(Config.AoSharpSdkRepoUrl);
             if (!await BuildAoSharpSdkLibraryProjectsAsync(logName, sdkPath, compiledLibraries, pullFirst))
             {
                 Report(logName, "AOSharp.Core.dll is missing — build AOSharp.SDK libraries in the loader first.", isError: true);
