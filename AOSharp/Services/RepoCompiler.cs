@@ -1452,9 +1452,17 @@ namespace AOSharp.Services
             if (string.IsNullOrWhiteSpace(path))
                 return 0;
 
-            var inBin = path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+            // A loader built with build.bat runs from its own bin folder, so every path under it contains
+            // in\. Only a bin folder below the loader's directory marks a fresh project build.
+            var withinLoader = path;
+            var loaderDir = Directories.CurrentDirectory;
+            if (!string.IsNullOrEmpty(loaderDir) &&
+                Path.GetFullPath(path).StartsWith(Path.GetFullPath(loaderDir), StringComparison.OrdinalIgnoreCase))
+                withinLoader = Path.GetFullPath(path).Substring(Path.GetFullPath(loaderDir).Length);
+
+            var inBin = withinLoader.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
                                 StringComparison.OrdinalIgnoreCase) ||
-                        path.Contains($"{Path.AltDirectorySeparatorChar}bin{Path.AltDirectorySeparatorChar}",
+                        withinLoader.Contains($"{Path.AltDirectorySeparatorChar}bin{Path.AltDirectorySeparatorChar}",
                             StringComparison.OrdinalIgnoreCase);
             var inPluginProjectDir = path.Contains(
                 $"{Path.DirectorySeparatorChar}Plugins{Path.DirectorySeparatorChar}AOSharp.",
@@ -1463,6 +1471,9 @@ namespace AOSharp.Services
 
             if (preference == SdkReferencePreference.FreshBuild)
             {
+                // The live host copy is what a fresh build replaces, never the build itself.
+                if (inLiveHost)
+                    return 1;
                 if (inBin)
                     return 5;
                 if (inPluginProjectDir && !inLiveHost)
