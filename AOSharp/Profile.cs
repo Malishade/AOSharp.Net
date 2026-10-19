@@ -84,7 +84,7 @@ namespace AOSharp
                     try { pipe.Disconnect(); } catch { }
                 }
 
-                if (!ReloadedInjector.Inject(Process))
+                if (!NativeInjector.Inject(Process))
                 {
                     Log.Error("Failed to inject bootstrap DLL");
                     return false;
