@@ -1603,9 +1603,13 @@ namespace AOSharp.Services
 
         /// <summary>
         /// Applies staged SDK binaries into Plugins\AOSharp.Bootstrap when they are no longer locked.
+        /// Runs at start, before every inject and after every eject, so it first catches up with an SDK
+        /// build whose copy into the host folder was missed.
         /// </summary>
         public static bool ApplyPendingBootstrapSdkUpdates()
         {
+            SyncBootstrapHostWithLastSdkBuild();
+
             var hostDir = GetBootstrapHostDirectory();
             var stagingDir = GetBootstrapStagingDirectory();
             if (!Directory.Exists(stagingDir))
@@ -1636,6 +1640,61 @@ namespace AOSharp.Services
 
             TryDeleteDirectoryIfEmpty(stagingDir);
             return !pending;
+        }
+
+        /// <summary>
+        /// The game loads the SDK from Plugins\AOSharp.Bootstrap. If any SDK library there differs from
+        /// the last build in the SDK clone, the build is copied in again (staged if the game holds it),
+        /// so a missed copy never leaves the game on an old SDK.
+        /// </summary>
+        private static void SyncBootstrapHostWithLastSdkBuild()
+        {
+            try
+            {
+                var clone = GetLocalRepoPath(Config.AoSharpSdkRepoUrl);
+                if (string.IsNullOrEmpty(clone) || !Directory.Exists(clone))
+                    return;
+
+                var hostDir = GetBootstrapHostDirectory();
+                var stale = new List<(string packageId, string dllPath)>();
+
+                foreach (var projName in AoSharpSdkLibraryBuildOrder)
+                {
+                    var built = Directory.EnumerateFiles(clone, projName + ".dll", SearchOption.AllDirectories)
+                        .Where(f => !IsIntermediateAssemblyPath(f) &&
+                                    f.IndexOf(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar,
+                                        StringComparison.OrdinalIgnoreCase) >= 0)
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .FirstOrDefault();
+                    if (built == null)
+                        continue;
+
+                    var live = Path.Combine(hostDir, projName + ".dll");
+                    if (!File.Exists(live) || !SameFileContent(built, live))
+                        stale.Add((projName, built));
+                }
+
+                if (stale.Count == 0)
+                    return;
+
+                Log.Information("[RepoCompiler] Bootstrap host is behind the last SDK build ({Libraries}); updating it.",
+                    string.Join(", ", stale.Select(e => e.packageId)));
+                SyncAoSharpSdkToBootstrapHostFolder(stale);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[RepoCompiler] Could not check the Bootstrap host against the last SDK build.");
+            }
+        }
+
+        private static bool SameFileContent(string a, string b)
+        {
+            var infoA = new FileInfo(a);
+            var infoB = new FileInfo(b);
+            if (infoA.Length != infoB.Length)
+                return false;
+
+            return File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
         }
 
         private static void TryDeleteDirectoryIfEmpty(string directoryPath)
