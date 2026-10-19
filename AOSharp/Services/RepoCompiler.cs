@@ -2452,19 +2452,22 @@ namespace AOSharp.Services
 
                 var projName = Path.GetFileNameWithoutExtension(depTarget);
                 var outputDir = GetPluginOutputPath(projName);
-                if (!forceRebuild)
+                var isSdk = string.Equals(depRepoUrl, Config.AoSharpSdkRepoUrl, StringComparison.OrdinalIgnoreCase);
+                var existingDll = TryResolveOutputDll(projName, outputDir);
+
+                // An existing build is reused only when it came from the commit the clone is on now.
+                // A DLL left by another repo or an older commit is rebuilt. The SDK keeps its own handling.
+                var buildStamp = isSdk ? null : GetDependencyBuildStamp(depRepoUrl, depLocal, depTarget);
+                var upToDate = existingDll != null && (isSdk || ReadDependencyBuildStamp(outputDir) == buildStamp);
+                if (!forceRebuild && upToDate)
                 {
-                    var existingDll = TryResolveOutputDll(projName, outputDir);
-                    if (existingDll != null)
-                    {
-                        RegisterManifestDependencyBuildOutputs(compiledLibraries, outputDir, projName);
-                        RegisterAoSharpSdkDllsFromOutputDir(compiledLibraries, outputDir);
-                        completed.Add(buildKey);
-                        return true;
-                    }
+                    RegisterManifestDependencyBuildOutputs(compiledLibraries, outputDir, projName);
+                    RegisterAoSharpSdkDllsFromOutputDir(compiledLibraries, outputDir);
+                    completed.Add(buildKey);
+                    return true;
                 }
 
-                if (string.Equals(depRepoUrl, Config.AoSharpSdkRepoUrl, StringComparison.OrdinalIgnoreCase))
+                if (isSdk)
                 {
                     if (!await BuildAoSharpSdkLibraryProjectsAsync(logName, depLocal, compiledLibraries, pullFirst: false))
                         return false;
@@ -2476,7 +2479,18 @@ namespace AOSharp.Services
 
                     var primaryDll = await Task.Run(() => Build(depTarget, projName));
                     if (primaryDll == null)
-                        return false;
+                    {
+                        // Usually the old DLL is locked by an injected game. Keep using it rather than
+                        // failing the plugin that needs it; the next compile after an eject updates it.
+                        if (existingDll == null)
+                            return false;
+
+                        Report(logName, $"Could not rebuild {projName}; using the existing build. Eject and compile again to update it.", isError: true);
+                    }
+                    else
+                    {
+                        WriteDependencyBuildStamp(outputDir, buildStamp);
+                    }
 
                     RegisterManifestDependencyBuildOutputs(compiledLibraries, outputDir, projName);
                     RegisterAoSharpSdkDllsFromOutputDir(compiledLibraries, outputDir);
@@ -2488,6 +2502,49 @@ namespace AOSharp.Services
             finally
             {
                 inProgress.Remove(buildKey);
+            }
+        }
+
+        private const string DependencyBuildStampFile = ".aosharp-build";
+
+        /// <summary>
+        /// Identifies what a dependency's output was built from: repo, project and commit.
+        /// Null when the commit cannot be read, which always counts as out of date.
+        /// </summary>
+        private string GetDependencyBuildStamp(string repoUrl, string repoLocalPath, string csprojPath)
+        {
+            var head = RunGitSingleLine(repoLocalPath, "rev-parse HEAD");
+            if (string.IsNullOrEmpty(head))
+                return null;
+
+            return $"{repoUrl}|{Path.GetRelativePath(repoLocalPath, csprojPath)}|{head}";
+        }
+
+        private static string ReadDependencyBuildStamp(string outputDir)
+        {
+            try
+            {
+                var path = Path.Combine(outputDir, DependencyBuildStampFile);
+                return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void WriteDependencyBuildStamp(string outputDir, string stamp)
+        {
+            if (string.IsNullOrEmpty(stamp))
+                return;
+
+            try
+            {
+                File.WriteAllText(Path.Combine(outputDir, DependencyBuildStampFile), stamp);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"[RepoCompiler] Could not write build stamp in {outputDir}: {ex.Message}");
             }
         }
 
